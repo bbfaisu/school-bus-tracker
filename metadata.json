@@ -1,0 +1,6 @@
+{
+  "name": "Safe School Bus Kashmir",
+  "description": "An interactive pilot school transport safety tracking app for RTO, schools, parents and drivers with real-time simulated location, speed, ETA, and violation alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
