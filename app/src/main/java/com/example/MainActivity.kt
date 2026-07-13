@@ -81,7 +81,7 @@ fun MainAppShell(viewModel: TrackerViewModel) {
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Safe School Bus",
+                                text = "School Bus Tracking",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp

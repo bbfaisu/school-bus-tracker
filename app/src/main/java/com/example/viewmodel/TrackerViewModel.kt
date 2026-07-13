@@ -19,6 +19,31 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         repository = BusTrackerRepository(database)
         viewModelScope.launch {
             repository.checkAndPrepopulate()
+            checkForActiveTripAndResume()
+        }
+    }
+
+    private fun checkForActiveTripAndResume() {
+        viewModelScope.launch {
+            val activeTrip = repository.getAnyActiveTrip()
+            if (activeTrip != null) {
+                val driver = repository.getDriverById(activeTrip.driverId)
+                if (driver != null) {
+                    _loggedInDriver.value = driver
+                    _currentRole.value = "Driver"
+                    
+                    val stops = repository.getStopsForRouteSync(activeTrip.routeId)
+                    _routeStops.value = stops
+                    _activeTripId.value = activeTrip.id
+                    _currentTrip.value = activeTrip
+                    
+                    _simSpeedSlider.value = activeTrip.currentSpeed
+                    _simIsDeviated.value = activeTrip.isDeviated
+                    _tripResumed.value = true
+                    
+                    startSimulation(activeTrip.id, stops)
+                }
+            }
         }
     }
 
@@ -43,6 +68,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             if (driver != null && driver.password == password) {
                 _loggedInDriver.value = driver
                 _loginError.value = null
+                checkForActiveTripAndResume()
             } else {
                 _loginError.value = "Invalid username or password"
             }
@@ -68,6 +94,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val allDrivers: StateFlow<List<Driver>> = repository.allDrivers.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val allRoutes: StateFlow<List<BusRoute>> = repository.allRoutes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val activeTrips: StateFlow<List<Trip>> = repository.activeTrips.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val allTrips: StateFlow<List<Trip>> = repository.allTrips.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val allViolations: StateFlow<List<ViolationRecord>> = repository.allViolations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Admin Creation states
@@ -120,6 +147,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val _activeTripId = MutableStateFlow<Int?>(null)
     val activeTripId: StateFlow<Int?> = _activeTripId.asStateFlow()
 
+    private val _tripResumed = MutableStateFlow(false)
+    val tripResumed: StateFlow<Boolean> = _tripResumed.asStateFlow()
+
     private val _currentTrip = MutableStateFlow<Trip?>(null)
     val currentTrip: StateFlow<Trip?> = _currentTrip.asStateFlow()
 
@@ -169,6 +199,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
             val tripId = repository.startTrip(driverId, busId, routeId, startLat, startLng).toInt()
             _activeTripId.value = tripId
+            _tripResumed.value = false
 
             // Reset simulation control states
             _simSpeedSlider.value = 35.0
@@ -295,6 +326,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         _parentLatenessTimerActive.value = false
         _parentLatenessSeconds.value = 0
         simulationProgress = 0
+        _tripResumed.value = false
     }
 
     // Trigger parent lateness stop

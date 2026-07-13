@@ -35,7 +35,7 @@ fun AdminScreen(
     modifier: Modifier = Modifier
 ) {
     var selectedTab by remember { mutableStateOf(0) }
-    val tabs = listOf("Live Fleet", "Violations & Lateness", "Buses", "Drivers", "Routes")
+    val tabs = listOf("Live Fleet", "Violations & Lateness", "Buses", "Drivers", "Routes", "Reports")
 
     Column(
         modifier = modifier
@@ -73,6 +73,7 @@ fun AdminScreen(
                 2 -> BusesTab(viewModel)
                 3 -> DriversTab(viewModel)
                 4 -> RoutesTab(viewModel)
+                5 -> ReportsScreen(viewModel)
             }
         }
     }
@@ -713,6 +714,13 @@ fun DriversTab(viewModel: TrackerViewModel) {
     }
 }
 
+data class PendingStop(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val name: String,
+    val latitude: String,
+    val longitude: String
+)
+
 @Composable
 fun RoutesTab(viewModel: TrackerViewModel) {
     val routes by viewModel.allRoutes.collectAsState()
@@ -720,6 +728,17 @@ fun RoutesTab(viewModel: TrackerViewModel) {
 
     var routeName by remember { mutableStateOf("") }
     var speedLimit by remember { mutableStateOf("40") }
+
+    var pendingStops by remember {
+        mutableStateOf(
+            listOf(
+                PendingStop(name = "Start Terminal", latitude = "34.0722", longitude = "74.8115"),
+                PendingStop(name = "Middle Junction", latitude = "34.0900", longitude = "74.8300"),
+                PendingStop(name = "Lake View Way", latitude = "34.1200", longitude = "74.8500"),
+                PendingStop(name = "End School", latitude = "34.1450", longitude = "74.8600")
+            )
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -779,7 +798,7 @@ fun RoutesTab(viewModel: TrackerViewModel) {
                                     .fillMaxWidth()
                                     .horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
+                             ) {
                                 stops.forEachIndexed { index, stop ->
                                     Box(
                                         modifier = Modifier
@@ -807,22 +826,144 @@ fun RoutesTab(viewModel: TrackerViewModel) {
         AlertDialog(
             onDismissRequest = { showDialog = false },
             containerColor = Color(0xFF222222),
-            title = { Text("Add Route", color = Color.White) },
+            title = { Text("Add Route & Stops", color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TextField(
-                        value = routeName,
-                        onValueChange = { routeName = it },
-                        label = { Text("Route Name (e.g. Shalimar to Hazratbal)") },
-                        modifier = Modifier.fillMaxWidth().testTag("route_name_input")
-                    )
-                    TextField(
-                        value = speedLimit,
-                        onValueChange = { speedLimit = it },
-                        label = { Text("Speed Limit (km/h)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth().testTag("speed_limit_input")
-                    )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF2D2D2D)),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text("Route Configuration", color = Color(0xFFFF9800), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            TextField(
+                                value = routeName,
+                                onValueChange = { routeName = it },
+                                label = { Text("Route Name (e.g. Shalimar to Hazratbal)") },
+                                modifier = Modifier.fillMaxWidth().testTag("route_name_input")
+                            )
+                            TextField(
+                                value = speedLimit,
+                                onValueChange = { speedLimit = it },
+                                label = { Text("Speed Limit (km/h)") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth().testTag("speed_limit_input")
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Route Stops Sequence (${pendingStops.size})", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        TextButton(
+                            onClick = {
+                                val lastStop = pendingStops.lastOrNull()
+                                val nextLat = lastStop?.latitude?.toDoubleOrNull()?.let { it + 0.012 } ?: 34.0722
+                                val nextLng = lastStop?.longitude?.toDoubleOrNull()?.let { it + 0.012 } ?: 74.8115
+                                val nextNum = pendingStops.size + 1
+                                pendingStops = pendingStops + PendingStop(
+                                    name = "Stop $nextNum",
+                                    latitude = (Math.round(nextLat * 10000.0) / 10000.0).toString(),
+                                    longitude = (Math.round(nextLng * 10000.0) / 10000.0).toString()
+                                )
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFF9800))
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Add Stop", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    pendingStops.forEachIndexed { index, stop ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF262626)),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Stop #${index + 1}",
+                                        color = Color.LightGray,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    if (pendingStops.size > 2) {
+                                        IconButton(
+                                            onClick = { pendingStops = pendingStops.filter { it.id != stop.id } },
+                                            modifier = Modifier.size(24.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Remove Stop",
+                                                tint = Color.Red,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                TextField(
+                                    value = stop.name,
+                                    onValueChange = { newName ->
+                                        pendingStops = pendingStops.map {
+                                            if (it.id == stop.id) it.copy(name = newName) else it
+                                        }
+                                    },
+                                    label = { Text("Stop Name") },
+                                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    TextField(
+                                        value = stop.latitude,
+                                        onValueChange = { newLat ->
+                                            pendingStops = pendingStops.map {
+                                                if (it.id == stop.id) it.copy(latitude = newLat) else it
+                                            }
+                                        },
+                                        label = { Text("Latitude") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        modifier = Modifier.weight(1f).height(56.dp)
+                                    )
+                                    TextField(
+                                        value = stop.longitude,
+                                        onValueChange = { newLng ->
+                                            pendingStops = pendingStops.map {
+                                                if (it.id == stop.id) it.copy(longitude = newLng) else it
+                                            }
+                                        },
+                                        label = { Text("Longitude") },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                        modifier = Modifier.weight(1f).height(56.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -830,23 +971,28 @@ fun RoutesTab(viewModel: TrackerViewModel) {
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
                     onClick = {
                         val limit = speedLimit.toDoubleOrNull() ?: 40.0
-                        if (routeName.isNotBlank()) {
-                            // Define standard 4 points along the Srinagar area
-                            val stops = listOf(
-                                "Start Terminal" to (34.0722f to 74.8115f),
-                                "Middle Junction" to (34.0900f to 74.8300f),
-                                "Lake View Way" to (34.1200f to 74.8500f),
-                                "End School" to (34.1450f to 74.8600f)
-                            )
-                            viewModel.createRouteWithStops(routeName, limit, stops)
+                        if (routeName.isNotBlank() && pendingStops.isNotEmpty()) {
+                            val stopsToSave = pendingStops.map {
+                                val lat = it.latitude.toFloatOrNull() ?: 34.0837f
+                                val lng = it.longitude.toFloatOrNull() ?: 74.7973f
+                                it.name to (lat to lng)
+                            }
+                            viewModel.createRouteWithStops(routeName, limit, stopsToSave)
+                            
                             routeName = ""
                             speedLimit = "40"
+                            pendingStops = listOf(
+                                PendingStop(name = "Start Terminal", latitude = "34.0722", longitude = "74.8115"),
+                                PendingStop(name = "Middle Junction", latitude = "34.0900", longitude = "74.8300"),
+                                PendingStop(name = "Lake View Way", latitude = "34.1200", longitude = "74.8500"),
+                                PendingStop(name = "End School", latitude = "34.1450", longitude = "74.8600")
+                            )
                             showDialog = false
                         }
                     },
                     modifier = Modifier.testTag("save_route_button")
                 ) {
-                    Text("Save Route", fontWeight = FontWeight.Bold)
+                    Text("Save Route & Stops", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {

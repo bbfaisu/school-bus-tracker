@@ -534,8 +534,39 @@ fun ActiveSimDriverPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute,
 
     val latenessTimerActive by viewModel.parentLatenessTimerActive.collectAsState()
     val latenessSec by viewModel.parentLatenessSeconds.collectAsState()
+    val tripResumed by viewModel.tripResumed.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
+        if (tripResumed) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1B5E20)),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .testTag("resumed_trip_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Resumed Icon",
+                        tint = Color.Green,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Trip Resumed: Active trip tracking restored successfully!",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
             shape = RoundedCornerShape(12.dp),

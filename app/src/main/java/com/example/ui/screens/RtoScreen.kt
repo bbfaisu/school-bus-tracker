@@ -28,6 +28,48 @@ fun RtoScreen(
     viewModel: TrackerViewModel,
     modifier: Modifier = Modifier
 ) {
+    var selectedRtoTab by remember { mutableStateOf(0) }
+    val rtoTabs = listOf("Safety Spotlight", "Deep Reports")
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color(0xFF121212))
+    ) {
+        TabRow(
+            selectedTabIndex = selectedRtoTab,
+            containerColor = Color(0xFF1E1E1E),
+            contentColor = Color(0xFF00E676), // Green RTO accent
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            rtoTabs.forEachIndexed { index, title ->
+                Tab(
+                    selected = selectedRtoTab == index,
+                    onClick = { selectedRtoTab = index },
+                    text = { Text(text = title, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+                )
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .weight(1f)
+        ) {
+            when (selectedRtoTab) {
+                0 -> RtoSpotlightContent(viewModel)
+                1 -> ReportsScreen(viewModel, isRtoView = true)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RtoSpotlightContent(
+    viewModel: TrackerViewModel,
+    modifier: Modifier = Modifier
+) {
     val violations by viewModel.allViolations.collectAsState()
     val buses by viewModel.allBuses.collectAsState()
 

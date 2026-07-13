@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Safe School Bus Kashmir"
+rootProject.name = "School Bus Tracking"
 
 include(":app")
