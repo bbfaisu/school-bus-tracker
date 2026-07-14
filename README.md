@@ -1,21 +1,14 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+**Project Credits**
 
-# Run and deploy your AI Studio app
+This project was developed by **Team Quad-Coders** as part of the **OpenHack 2026** innovation competition, organized by **Emly Labs** in collaboration with **Government College for Women, M.A. Road, Srinagar**.
 
-This contains everything you need to run your app locally.
+The project represents the collective efforts, technical expertise, and dedication of the team members:
 
-View your app in AI Studio: https://ai.studio/apps/50462146-ee7e-4603-814a-11dcec9ac548
+* **Faisal Yaqoob Baba**
+* **Javaid Bhat**
+* **Danish Shakoor**
+* **Abid Parray**
 
-## Run Locally
+Throughout the competition, the team worked collaboratively to conceptualize, design, develop, and refine the solution, applying modern software development practices and innovative problem-solving techniques. This project reflects the team's commitment to creating practical, user-centric technology while showcasing their skills in software engineering, teamwork, and innovation.
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
-
-
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
+We extend our sincere gratitude to **Emly Labs** for organizing the OpenHack 2026 competition and to **Government College for Women, M.A. Road, Srinagar**, for collaborating in this initiative and providing a platform that encouraged creativity, learning, and technological excellence among aspiring developers.
