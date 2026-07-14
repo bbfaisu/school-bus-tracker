@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
@@ -20,8 +21,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.example.data.*
 import com.example.ui.components.SimulatedMap
+import com.google.android.gms.maps.model.LatLng
 import com.example.viewmodel.TrackerViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -452,12 +458,212 @@ fun DutyAssignmentSelector(
 fun PreTripChecklistPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute) {
     val checklist by viewModel.checklist.collectAsState()
     val allChecked = checklist.values.all { it }
+    val isSimMode by viewModel.isSimulationMode.collectAsState()
+
+    val routeStops by viewModel.routeStops.collectAsState()
+    val preTripDriverLocation by viewModel.preTripDriverLocation.collectAsState()
+    val distanceToFirstStopKm by viewModel.distanceToFirstStopKm.collectAsState()
+    val isNearFirstStop by viewModel.isNearFirstStop.collectAsState()
+    val tripStartError by viewModel.tripStartError.collectAsState()
+
+    LaunchedEffect(route.id, isSimMode) {
+        viewModel.initializePreTripLocation(route.id)
+    }
+
+    if (tripStartError != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearTripStartError() },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Default.Warning, contentDescription = "Warning Icon", tint = Color(0xFFEF5350))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Trip Start Denied", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Text(tripStartError!!, color = Color.LightGray, fontSize = 14.sp)
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearTripStartError() }) {
+                    Text("OK", color = Color(0xFFFF9800), fontWeight = FontWeight.Bold)
+                }
+            },
+            containerColor = Color(0xFF1E1E1E)
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            viewModel.setSimulationMode(false)
+        } else {
+            viewModel.setSimulationMode(true)
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
+        // Driver position tracker and route starting map
+        Text(
+            text = "PRE-TRIP GPS ALIGNMENT MAP",
+            color = Color.LightGray,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            letterSpacing = 1.sp,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+
+        SimulatedMap(
+            trip = null,
+            stops = routeStops,
+            driverLocation = preTripDriverLocation,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(240.dp)
+                .padding(bottom = 12.dp)
+        )
+
+        // Starting stop proximity and guidance card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (isNearFirstStop) Color(0xFF1B5E20) else Color(0xFF3E2723)
+            ),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .testTag("driver_start_stop_proximity_card")
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = if (isNearFirstStop) Icons.Default.CheckCircle else Icons.Default.Warning,
+                            contentDescription = "Proximity Status Icon",
+                            tint = if (isNearFirstStop) Color.Green else Color(0xFFFF9800),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                text = "START STOP PROXIMITY",
+                                color = Color.LightGray,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                letterSpacing = 0.5.sp
+                            )
+                            Text(
+                                text = if (isNearFirstStop) "Arrived at First Stop" else "Too Far from First Stop",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                val firstStopName = routeStops.firstOrNull()?.stopName ?: "Stop 1"
+                val distanceText = if (distanceToFirstStopKm != null) {
+                    String.format(java.util.Locale.US, "%.2f km", distanceToFirstStopKm)
+                } else {
+                    "Loading coordinates..."
+                }
+                Text(
+                    text = "First Stop: $firstStopName\nCurrent Distance: $distanceText\nAlignment Limit: Must be within 0.15 km (150 meters) of the starting stop.",
+                    color = Color.LightGray,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp
+                )
+
+                if (!isNearFirstStop && isSimMode) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = { viewModel.simulateMoveToFirstStop() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp)
+                            .testTag("simulate_move_first_stop_btn")
+                    ) {
+                        Text("Simulate Arriving at First Stop", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
+            border = androidx.compose.foundation.BorderStroke(
+                width = 1.dp,
+                color = if (isSimMode) Color(0xFFFF9800).copy(alpha = 0.4f) else Color(0xFF00E676).copy(alpha = 0.4f)
+            ),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+                .testTag("pre_trip_tracking_mode")
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "TRACKING METHOD",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            letterSpacing = 0.5.sp
+                        )
+                        Text(
+                            text = if (isSimMode) "Simulated Local Coordinates" else "Real GPS Cloud Streams",
+                            color = if (isSimMode) Color(0xFFFF9800) else Color(0xFF00E676),
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp
+                        )
+                    }
+                    
+                    Switch(
+                        checked = !isSimMode,
+                        onCheckedChange = { isReal -> 
+                            if (isReal) {
+                                permissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                            } else {
+                                viewModel.setSimulationMode(true)
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color(0xFF00E676),
+                            checkedTrackColor = Color(0xFF1B5E20),
+                            uncheckedThumbColor = Color(0xFFFF9800),
+                            uncheckedTrackColor = Color(0xFF3E2723)
+                        ),
+                        modifier = Modifier.testTag("pre_trip_simulation_toggle")
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (isSimMode) {
+                        "High-frequency virtual drive simulation. Safe offline testing where position ticks are calculated inside the app frame."
+                    } else {
+                        "Sub-second real-time streaming protocol. Telemetry packets are sent via secure WebSockets and echoed in real-time."
+                    },
+                    color = Color.Gray,
+                    fontSize = 11.sp
+                )
+            }
+        }
+
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
             shape = RoundedCornerShape(12.dp)
@@ -501,6 +707,9 @@ fun PreTripChecklistPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute
         Button(
             enabled = allChecked,
             onClick = {
+                if (!isSimMode) {
+                    permissionLauncher.launch(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                }
                 viewModel.startTrip(viewModel.loggedInDriver.value!!.id, bus.id, route.id)
             },
             colors = ButtonDefaults.buttonColors(
@@ -536,6 +745,8 @@ fun ActiveSimDriverPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute,
     val latenessSec by viewModel.parentLatenessSeconds.collectAsState()
     val tripResumed by viewModel.tripResumed.collectAsState()
 
+    var isTimelineExpanded by remember { mutableStateOf(true) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         if (tripResumed) {
             Card(
@@ -567,6 +778,9 @@ fun ActiveSimDriverPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute,
             }
         }
 
+        val isSimMode by viewModel.isSimulationMode.collectAsState()
+        val isWsConnected by WebSocketManager.isConnected.collectAsState()
+
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
             shape = RoundedCornerShape(12.dp),
@@ -584,10 +798,36 @@ fun ActiveSimDriverPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute,
                         modifier = Modifier
                             .size(10.dp)
                             .clip(RoundedCornerShape(5.dp))
-                            .background(Color.Green)
+                            .background(if (isSimMode) Color(0xFFFF9800) else Color(0xFF00E676))
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("ACTIVE TRIP ID: #$tripId", color = Color.LightGray, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Column {
+                        Text("ACTIVE TRIP ID: #$tripId", color = Color.LightGray, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                            Text(
+                                text = if (isSimMode) "SIMULATION ACTIVE" else "LIVE GPS STREAMING",
+                                color = if (isSimMode) Color(0xFFFF9800) else Color(0xFF00E676),
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 10.sp
+                            )
+                            if (!isSimMode) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(if (isWsConnected) Color(0xFF00E676) else Color(0xFFEF5350))
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (isWsConnected) "WS connected" else "WS offline",
+                                    color = if (isWsConnected) Color(0xFF00E676) else Color(0xFFEF5350),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Button(
@@ -627,6 +867,410 @@ fun ActiveSimDriverPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute,
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Live Telemetry Protocol Controller (Simulation vs Real-time WebSocket)
+                item {
+                    val isSimMode by viewModel.isSimulationMode.collectAsState()
+                    val isWsConnected by WebSocketManager.isConnected.collectAsState()
+                    
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF141414)),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = 1.dp,
+                            color = if (!isSimMode) {
+                                if (isWsConnected) Color(0xFF00E676).copy(alpha = 0.5f) else Color(0xFFEF5350).copy(alpha = 0.5f)
+                            } else Color.DarkGray
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("telemetry_protocol_card")
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = if (isSimMode) Icons.Default.Tune else Icons.Default.Wifi,
+                                        contentDescription = "Protocol Icon",
+                                        tint = if (!isSimMode && isWsConnected) Color(0xFF00E676) else Color(0xFFFF9800),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "LIVE TELEMETRY PROTOCOL",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                }
+                                
+                                // On/Off Switch
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = if (isSimMode) "SIMULATION" else "REAL GPS",
+                                        color = if (isSimMode) Color(0xFFFF9800) else Color(0xFF00E676),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                        modifier = Modifier.padding(end = 8.dp)
+                                    )
+                                    Switch(
+                                        checked = !isSimMode,
+                                        onCheckedChange = { isReal -> viewModel.setSimulationMode(!isReal) },
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color(0xFF00E676),
+                                            checkedTrackColor = Color(0xFF1B5E20),
+                                            uncheckedThumbColor = Color(0xFFFF9800),
+                                            uncheckedTrackColor = Color(0xFF3E2723)
+                                        ),
+                                        modifier = Modifier.testTag("simulation_toggle_switch")
+                                    )
+                                }
+                            }
+                            
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            Text(
+                                text = if (isSimMode) {
+                                    "Running in simulated offline tracking. High-frequency position calculations are computed locally inside the app."
+                                } else {
+                                    "Running in high-speed, sub-second live mode. Coordinates are streamed as telemetry packets over OkHttp WebSockets and echoed in real-time from the cloud."
+                                },
+                                color = Color.Gray,
+                                fontSize = 10.sp
+                            )
+                            
+                            if (!isSimMode) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(if (isWsConnected) Color(0xFF163220) else Color(0xFF2C1B1B))
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(if (isWsConnected) Color(0xFF00E676) else Color(0xFFEF5350))
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isWsConnected) {
+                                            "WEBSOCKET ONLINE (wss://ws.postman-echo.com)"
+                                        } else {
+                                            "WEBSOCKET OFFLINE (Reconnection loop active...)"
+                                        },
+                                        color = if (isWsConnected) Color(0xFF00E676) else Color(0xFFEF5350),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Trip Progress Header Item
+                item {
+                    val trip = currentTrip
+                    if (trip != null && stops.isNotEmpty()) {
+                        val currentIndex = trip.currentStopIndex
+                        val currentStop = stops.getOrNull(currentIndex)
+                        val nextStop = stops.getOrNull(currentIndex + 1)
+                        
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF252525)),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Text(
+                                    text = "LIVE NAVIGATION DASHBOARD",
+                                    color = Color(0xFFFF9800),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp
+                                )
+                                
+                                Spacer(modifier = Modifier.height(10.dp))
+                                
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Current Stop column
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = if (waitingAtStop) "CURRENT STOP (WAITING)" else "LAST STOP DEPARTED",
+                                            color = Color.Gray,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = currentStop?.stopName ?: "None",
+                                            color = Color.White,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                        if (currentStop != null) {
+                                            Text(
+                                                text = "Seq: ${currentStop.sequenceOrder} • Est: ${currentStop.expectedArrivalMinutes}m",
+                                                color = Color.LightGray,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                    
+                                    // Arrow / Direction Icon
+                                    Box(
+                                        modifier = Modifier
+                                            .background(Color(0xFF333333), RoundedCornerShape(8.dp))
+                                            .padding(6.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ArrowForward,
+                                            contentDescription = "to",
+                                            tint = Color(0xFFFF9800),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                    
+                                    // Next Stop column
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "NEXT STOP",
+                                            color = Color.Gray,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = nextStop?.stopName ?: "Final Destination",
+                                            color = if (nextStop != null) Color(0xFFFF9800) else Color.Green,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                        if (nextStop != null) {
+                                            Text(
+                                                text = "Seq: ${nextStop.sequenceOrder} • Est: ${nextStop.expectedArrivalMinutes}m",
+                                                color = Color.LightGray,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
+                                
+                                // Progress bar
+                                Spacer(modifier = Modifier.height(14.dp))
+                                
+                                val totalStops = stops.size
+                                val progressFraction = if (totalStops > 1) {
+                                    (currentIndex.toFloat() / (totalStops - 1).toFloat()).coerceIn(0f, 1f)
+                                } else 1f
+                                
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    LinearProgressIndicator(
+                                        progress = progressFraction,
+                                        color = Color(0xFFFF9800),
+                                        trackColor = Color(0xFF3E3E3E),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(6.dp)
+                                            .clip(RoundedCornerShape(3.dp))
+                                    )
+                                    
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "Stop ${currentIndex + 1} of $totalStops",
+                                            color = Color.LightGray,
+                                            fontSize = 11.sp
+                                        )
+                                        val remaining = totalStops - 1 - currentIndex
+                                        Text(
+                                            text = if (remaining > 0) "$remaining stops remaining" else "Destination reached",
+                                            color = if (remaining > 0) Color.LightGray else Color.Green,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Expandable Route Plan Timeline
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.DarkGray),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column {
+                            // Header
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { isTimelineExpanded = !isTimelineExpanded }
+                                    .padding(14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.List,
+                                        contentDescription = "Route Plan",
+                                        tint = Color(0xFFFF9800),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "FULL ROUTE STOP TIMELINE",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                }
+                                Icon(
+                                    imageVector = if (isTimelineExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (isTimelineExpanded) "Collapse" else "Expand",
+                                    tint = Color.Gray
+                                )
+                            }
+                            
+                            if (isTimelineExpanded && stops.isNotEmpty()) {
+                                Divider(color = Color.DarkGray, thickness = 1.dp)
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    stops.forEachIndexed { index, stop ->
+                                        val trip = currentTrip
+                                        val currentIndex = trip?.currentStopIndex ?: 0
+                                        
+                                        // Determine status
+                                        val isCompleted = index < currentIndex
+                                        val isCurrent = index == currentIndex
+                                        val isNext = index == currentIndex + 1
+                                        
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Left timeline line & indicator
+                                            Box(
+                                                modifier = Modifier.width(32.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                // Indicator node
+                                                when {
+                                                    isCompleted -> {
+                                                        Icon(
+                                                            imageVector = Icons.Default.CheckCircle,
+                                                            contentDescription = "Completed",
+                                                            tint = Color(0xFF2E7D32),
+                                                            modifier = Modifier.size(20.dp)
+                                                        )
+                                                    }
+                                                    isCurrent -> {
+                                                        Icon(
+                                                            imageVector = Icons.Default.DirectionsBus,
+                                                            contentDescription = "Current",
+                                                            tint = Color(0xFFFF9800),
+                                                            modifier = Modifier.size(22.dp)
+                                                        )
+                                                    }
+                                                    isNext -> {
+                                                        Icon(
+                                                            imageVector = Icons.Default.PushPin,
+                                                            contentDescription = "Next Stop",
+                                                            tint = Color(0xFF0288D1),
+                                                            modifier = Modifier.size(20.dp)
+                                                        )
+                                                    }
+                                                    else -> {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Place,
+                                                            contentDescription = "Pending",
+                                                            tint = Color.Gray,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Stop Name & Details
+                                            Column(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .padding(start = 8.dp)
+                                            ) {
+                                                Text(
+                                                    text = stop.stopName,
+                                                    color = when {
+                                                        isCompleted -> Color.Gray
+                                                        isCurrent -> Color.White
+                                                        isNext -> Color(0xFF00E5FF)
+                                                        else -> Color.LightGray
+                                                    },
+                                                    fontWeight = if (isCurrent || isNext) FontWeight.Bold else FontWeight.Normal,
+                                                    fontSize = 14.sp
+                                                )
+                                                
+                                                val subtitleText = when {
+                                                    isCompleted -> "Departed"
+                                                    isCurrent -> if (waitingAtStop) "Waiting at Stop (Lateness tracking active)" else "Departed/In Transit"
+                                                    isNext -> "In Transit (Expected: ${stop.expectedArrivalMinutes} mins from start)"
+                                                    else -> "Upcoming (Expected: ${stop.expectedArrivalMinutes} mins from start)"
+                                                }
+                                                Text(
+                                                    text = subtitleText,
+                                                    color = if (isCurrent) Color(0xFFFFB300) else Color.Gray,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                            
+                                            // Sequence Order Badge
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(
+                                                        color = when {
+                                                            isCurrent -> Color(0xFFFF9800).copy(alpha = 0.2f)
+                                                            isNext -> Color(0xFF0288D1).copy(alpha = 0.2f)
+                                                            else -> Color(0xFF2E2E2E)
+                                                        },
+                                                        shape = RoundedCornerShape(4.dp)
+                                                    )
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            ) {
+                                                Text(
+                                                    text = "#${stop.sequenceOrder}",
+                                                    color = when {
+                                                        isCurrent -> Color(0xFFFF9800)
+                                                        isNext -> Color(0xFF00E5FF)
+                                                        else -> Color.Gray
+                                                    },
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Arrived at stop handler
                 if (waitingAtStop) {
                     val stopName = stops.getOrNull(currentTrip?.currentStopIndex ?: 0)?.stopName ?: "Destination Stop"
@@ -701,45 +1345,277 @@ fun ActiveSimDriverPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute,
                     }
                 }
 
-                // Speed Limit Controller
-                item {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Bus Speed Controller (Telemetry)",
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
-                            val limit = route.speedLimit
-                            Text(
-                                text = "${simSpeed.toInt()} km/h (Limit: ${limit.toInt()})",
-                                color = if (simSpeed > limit) Color(0xFFE53935) else Color(0xFFFF9800),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
-                            )
-                        }
-
-                        Slider(
-                            value = simSpeed.toFloat(),
-                            onValueChange = { viewModel.setSimSpeed(it.toDouble()) },
-                            valueRange = 10f..85f,
-                            colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFFFF9800),
-                                activeTrackColor = Color(0xFFFF9800)
+                // Overtaking & Sudden Speed Increase Warning Card
+                val isOvertaking = currentTrip?.isOvertaking ?: false
+                if (isOvertaking) {
+                    item {
+                        val infiniteTransition = rememberInfiniteTransition(label = "OvertakePulse")
+                        val overtakeBgColor by infiniteTransition.animateColor(
+                            initialValue = Color(0xFFE65100).copy(alpha = 0.85f),
+                            targetValue = Color(0xFFD84315).copy(alpha = 1.0f),
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(400, easing = LinearEasing),
+                                repeatMode = RepeatMode.Reverse
                             ),
-                            modifier = Modifier.testTag("driver_speed_slider")
+                            label = "overtakeBgColor"
                         )
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = overtakeBgColor),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("overtaking_warning_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "Overtaking Warning Icon",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "⚠️ SUDDEN SPEED INCREASE CAUGHT!",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 13.sp,
+                                        letterSpacing = 0.5.sp
+                                    )
+                                    Text(
+                                        text = "Dangerous overtaking maneuvers and abrupt speed surges are strictly monitored. Violation logged in system archives.",
+                                        color = Color.LightGray,
+                                        fontSize = 11.sp,
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
 
-                        Text(
-                            text = "Slide above ${route.speedLimit.toInt()} km/h to trigger real-time speed violation alerts and log records.",
-                            color = Color.Gray,
-                            fontSize = 10.sp
-                        )
+                // Speed Limit Controller & Real-Time Monitoring HUD
+                item {
+                    val currentSpeed = if (isSimMode) simSpeed else (currentTrip?.currentSpeed ?: 0.0)
+                    val limit = route.speedLimit
+                    val isSpeeding = currentSpeed > limit
+
+                    // Dynamic pulsing warning animation for speed limit infraction
+                    val infiniteTransition = rememberInfiniteTransition(label = "SpeedPulse")
+                    val warningCardBg by infiniteTransition.animateColor(
+                        initialValue = Color(0xFFEF5350).copy(alpha = 0.08f),
+                        targetValue = Color(0xFFC62828).copy(alpha = 0.28f),
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(800, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "warningCardBg"
+                    )
+                    val warningCardBorder by infiniteTransition.animateColor(
+                        initialValue = Color(0xFFE53935).copy(alpha = 0.3f),
+                        targetValue = Color(0xFFE53935).copy(alpha = 0.95f),
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(800, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "warningCardBorder"
+                    )
+
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isSpeeding) warningCardBg else Color(0xFF141414)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = if (isSpeeding) 2.dp else 1.dp,
+                            color = if (isSpeeding) warningCardBorder else Color.DarkGray
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("driver_speed_hud_card")
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            // Section 1: Dashboard telemetry
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // Left: Visual gauge dial
+                                Box(
+                                    modifier = Modifier
+                                        .size(110.dp)
+                                        .padding(4.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                                        // Draw base track
+                                        drawArc(
+                                            color = Color.DarkGray.copy(alpha = 0.35f),
+                                            startAngle = 135f,
+                                            sweepAngle = 270f,
+                                            useCenter = false,
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                width = 8.dp.toPx(),
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                            )
+                                        )
+                                        // Draw active speed progress
+                                        val sweep = (currentSpeed / limit * 270.0).toFloat().coerceIn(0f, 270f)
+                                        drawArc(
+                                            color = if (isSpeeding) Color(0xFFEF5350) else Color(0xFF00E676),
+                                            startAngle = 135f,
+                                            sweepAngle = sweep,
+                                            useCenter = false,
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                width = 8.dp.toPx(),
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                            )
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = "${currentSpeed.toInt()}",
+                                            fontSize = 32.sp,
+                                            fontWeight = FontWeight.Black,
+                                            color = if (isSpeeding) Color(0xFFEF5350) else Color.White
+                                        )
+                                        Text(
+                                            text = "km/h",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.Gray
+                                        )
+                                    }
+                                }
+
+                                // Right: Details & interactive telemetry data
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Speed,
+                                            contentDescription = "Speed Icon",
+                                            tint = if (isSpeeding) Color(0xFFEF5350) else Color.LightGray,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "REAL-TIME SPEED TELEMETRY",
+                                            color = if (isSpeeding) Color(0xFFEF5350) else Color.LightGray,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.sp,
+                                            letterSpacing = 0.5.sp
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(6.dp))
+
+                                    // Interactive Status Badge
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(
+                                                if (isSpeeding) Color(0xFFFFCDD2).copy(alpha = 0.15f) else Color(0xFFC8E6C9).copy(alpha = 0.15f)
+                                            )
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                imageVector = if (isSpeeding) Icons.Default.Warning else Icons.Default.CheckCircle,
+                                                contentDescription = "Status Icon",
+                                                tint = if (isSpeeding) Color(0xFFEF5350) else Color(0xFF00E676),
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = if (isSpeeding) "⚠️ EXCEEDING SPEED LIMIT" else "✓ SAFE DRIVING SPEED",
+                                                color = if (isSpeeding) Color(0xFFEF5350) else Color(0xFF00E676),
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+
+                                    Text(
+                                        text = "Route Speed Limit: ${limit.toInt()} km/h",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+
+                                    Text(
+                                        text = if (isSpeeding) "Deaccelerate immediately to protect student passengers!" else "Vehicle operating inside safe speed boundary guidelines.",
+                                        color = if (isSpeeding) Color(0xFFEF5350) else Color.Gray,
+                                        fontSize = 10.sp,
+                                        lineHeight = 12.sp,
+                                        modifier = Modifier.padding(top = 2.dp)
+                                    )
+                                }
+                            }
+
+                            // Section 2: Simulator slider control
+                            if (isSimMode) {
+                                Divider(
+                                    color = Color.DarkGray.copy(alpha = 0.5f),
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+
+                                Text(
+                                    text = "Simulate Speed Pedal (Telemetry Override):",
+                                    color = Color.LightGray,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                )
+
+                                Slider(
+                                    value = simSpeed.toFloat(),
+                                    onValueChange = { viewModel.setSimSpeed(it.toDouble()) },
+                                    valueRange = 10f..85f,
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = if (isSpeeding) Color(0xFFEF5350) else Color(0xFFFF9800),
+                                        activeTrackColor = if (isSpeeding) Color(0xFFEF5350) else Color(0xFFFF9800),
+                                        inactiveTrackColor = Color.DarkGray
+                                    ),
+                                    modifier = Modifier
+                                        .testTag("driver_speed_slider")
+                                        .padding(vertical = 4.dp)
+                                )
+
+                                Text(
+                                    text = "Drag the slider past ${limit.toInt()} km/h to test the dynamic flashing visual warning and auto-logging systems.",
+                                    color = Color.Gray,
+                                    fontSize = 10.sp,
+                                    lineHeight = 12.sp
+                                )
+                            } else {
+                                Divider(
+                                    color = Color.DarkGray.copy(alpha = 0.5f),
+                                    modifier = Modifier.padding(vertical = 12.dp)
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.GpsFixed,
+                                        contentDescription = "GPS Active",
+                                        tint = Color(0xFF00E676),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "GPS Sensors Active: Tracking real vehicle velocity in real-time.",
+                                        color = Color.Gray,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
 

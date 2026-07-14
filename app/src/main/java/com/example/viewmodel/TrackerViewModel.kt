@@ -1,9 +1,12 @@
 package com.example.viewmodel
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.*
+import com.google.android.gms.location.*
+import com.google.android.gms.maps.model.LatLng
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -13,13 +16,87 @@ import kotlin.math.*
 class TrackerViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: BusTrackerRepository
+    private var fusedLocationClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(application)
+    private var locationCallback: LocationCallback? = null
+
+    private val _supabaseConnected = MutableStateFlow(false)
+    val supabaseConnected: StateFlow<Boolean> = _supabaseConnected.asStateFlow()
 
     init {
         val database = AppDatabase.getDatabase(application)
         repository = BusTrackerRepository(database)
         viewModelScope.launch {
+            // 1. Initial connection & schema setup on background threads
+            val connected = SupabaseDbManager.testConnection()
+            _supabaseConnected.value = connected
+            if (connected) {
+                SupabaseDbManager.initializeSchemaAndPrepopulate()
+                repository.syncWithSupabase()
+            }
+
+            // 2. Local check & prepopulate fallback + active trip resumption
             repository.checkAndPrepopulate()
             checkForActiveTripAndResume()
+
+            // 3. Periodic Background Sync Loop (runs every 3 seconds to pull live updates from remote)
+            launch {
+                while (true) {
+                    delay(3000)
+                    val connStatus = SupabaseDbManager.testConnection()
+                    _supabaseConnected.value = connStatus
+                    if (connStatus) {
+                        repository.syncWithSupabase()
+                    }
+                }
+            }
+
+            // 4. WebSocket live stream listener (sub-second telemetry updates from cloud)
+            launch {
+                WebSocketManager.incomingTelemetry.collect { telemetryStr ->
+                    if (telemetryStr != null) {
+                        try {
+                            val json = org.json.JSONObject(telemetryStr)
+                            val tId = json.getInt("tripId")
+                            val lat = json.getDouble("latitude").toFloat()
+                            val lng = json.getDouble("longitude").toFloat()
+                            val speed = json.getDouble("speed")
+                            val isDeviated = json.getBoolean("isDeviated")
+                            
+                            val trip = repository.getTripByIdSync(tId)
+                            if (trip != null) {
+                                val currIndex = trip.currentStopIndex
+                                val stops = _routeStops.value
+                                
+                                var arrivedIndex = currIndex
+                                
+                                if (stops.isNotEmpty() && currIndex < stops.size - 1) {
+                                    val nextStop = stops[currIndex + 1]
+                                    val dist = calculateDistance(lat.toDouble(), lng.toDouble(), nextStop.latitude.toDouble(), nextStop.longitude.toDouble())
+                                    if (dist < 0.05) { // within 50 meters, we consider it arrived!
+                                        arrivedIndex = currIndex + 1
+                                        _waitingAtStop.value = true
+                                        simulationProgress = 0
+                                    }
+                                }
+                                
+                                repository.updateTripPosition(
+                                    tripId = tId,
+                                    lat = lat,
+                                    lng = lng,
+                                    speed = speed,
+                                    stopIndex = arrivedIndex,
+                                    isDeviated = isDeviated,
+                                    isOvertaking = trip.isOvertaking
+                                )
+                                
+                                _currentTrip.value = repository.getTripByIdSync(tId)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("TrackerViewModel", "WebSocket live tracking frame parse error: ${e.message}")
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -39,9 +116,19 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     
                     _simSpeedSlider.value = activeTrip.currentSpeed
                     _simIsDeviated.value = activeTrip.isDeviated
+                    _isSimulationMode.value = activeTrip.isSimulation
+                    if (activeTrip.isSimulation) {
+                        WebSocketManager.disconnect()
+                    } else {
+                        WebSocketManager.connect()
+                    }
                     _tripResumed.value = true
                     
-                    startSimulation(activeTrip.id, stops)
+                    if (activeTrip.isSimulation) {
+                        startSimulation(activeTrip.id, stops)
+                    } else {
+                        startRealGpsTracking(activeTrip.id)
+                    }
                 }
             }
         }
@@ -172,9 +259,144 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val _parentLatenessSeconds = MutableStateFlow(0)
     val parentLatenessSeconds: StateFlow<Int> = _parentLatenessSeconds.asStateFlow()
 
+    private val _isSimulationMode = MutableStateFlow(true)
+    val isSimulationMode: StateFlow<Boolean> = _isSimulationMode.asStateFlow()
+
+    private val _preTripDriverLocation = MutableStateFlow<LatLng?>(null)
+    val preTripDriverLocation: StateFlow<LatLng?> = _preTripDriverLocation.asStateFlow()
+
+    private val _tripStartError = MutableStateFlow<String?>(null)
+    val tripStartError: StateFlow<String?> = _tripStartError.asStateFlow()
+
+    fun clearTripStartError() {
+        _tripStartError.value = null
+    }
+
+    val distanceToFirstStopKm: StateFlow<Double?> = combine(_preTripDriverLocation, _routeStops) { loc, stops ->
+        if (loc == null || stops.isEmpty()) {
+            null
+        } else {
+            val firstStop = stops.first()
+            calculateDistance(loc.latitude, loc.longitude, firstStop.latitude.toDouble(), firstStop.longitude.toDouble())
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    val isNearFirstStop: StateFlow<Boolean> = distanceToFirstStopKm.map { dist ->
+        if (dist == null) true
+        else dist <= 0.15
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
     private var simulationProgress = 0 // 0 to 10 between stops
     private var lastOverspeedLogged = 0L
     private var lastDeviationLogged = 0L
+    private var lastOvertakingLogged = 0L
+
+    fun setSimulationMode(enabled: Boolean) {
+        _isSimulationMode.value = enabled
+        val activeId = _activeTripId.value
+        if (activeId != null) {
+            viewModelScope.launch {
+                val stops = _routeStops.value
+                if (enabled) {
+                    stopRealGpsTracking()
+                    WebSocketManager.disconnect()
+                    startSimulation(activeId, stops)
+                } else {
+                    simulationJob?.cancel()
+                    simulationJob = null
+                    WebSocketManager.connect()
+                    startRealGpsTracking(activeId)
+                }
+            }
+        } else {
+            if (enabled) {
+                stopPreTripRealLocationTracking()
+                WebSocketManager.disconnect()
+                val stops = _routeStops.value
+                if (stops.isNotEmpty()) {
+                    val firstStop = stops.first()
+                    _preTripDriverLocation.value = LatLng(
+                        firstStop.latitude.toDouble() + 0.012,
+                        firstStop.longitude.toDouble() + 0.012
+                    )
+                }
+            } else {
+                WebSocketManager.connect()
+                startPreTripRealLocationTracking()
+            }
+        }
+    }
+
+    fun initializePreTripLocation(routeId: Int) {
+        viewModelScope.launch {
+            val stops = repository.getStopsForRouteSync(routeId)
+            _routeStops.value = stops
+            if (stops.isNotEmpty()) {
+                val firstStop = stops.first()
+                if (_isSimulationMode.value) {
+                    _preTripDriverLocation.value = LatLng(
+                        firstStop.latitude.toDouble() + 0.012,
+                        firstStop.longitude.toDouble() + 0.012
+                    )
+                } else {
+                    startPreTripRealLocationTracking()
+                }
+            }
+        }
+    }
+
+    fun simulateMoveToFirstStop() {
+        val stops = _routeStops.value
+        if (stops.isNotEmpty()) {
+            val firstStop = stops.first()
+            _preTripDriverLocation.value = LatLng(
+                firstStop.latitude.toDouble(),
+                firstStop.longitude.toDouble()
+            )
+        }
+    }
+
+    private var preTripLocationCallback: LocationCallback? = null
+
+    fun startPreTripRealLocationTracking() {
+        stopPreTripRealLocationTracking()
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2000L).apply {
+            setMinUpdateIntervalMillis(2000L)
+        }.build()
+
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                val location = locationResult.lastLocation ?: return
+                if (!_isSimulationMode.value) {
+                    _preTripDriverLocation.value = LatLng(location.latitude, location.longitude)
+                }
+            }
+        }
+        preTripLocationCallback = callback
+        try {
+            fusedLocationClient.requestLocationUpdates(request, callback, android.os.Looper.getMainLooper())
+        } catch (e: SecurityException) {
+            Log.e("TrackerViewModel", "Pre-trip Location Access Error: ${e.message}")
+        }
+    }
+
+    fun stopPreTripRealLocationTracking() {
+        preTripLocationCallback?.let {
+            try {
+                fusedLocationClient.removeLocationUpdates(it)
+            } catch (e: Exception) {
+                Log.e("TrackerViewModel", "Error removing pre-trip location updates: ${e.message}")
+            }
+            preTripLocationCallback = null
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopRealGpsTracking()
+        stopPreTripRealLocationTracking()
+        WebSocketManager.disconnect()
+    }
 
     fun setSimSpeed(speed: Double) {
         _simSpeedSlider.value = speed
@@ -194,10 +416,32 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             if (stops.isEmpty()) return@launch
             _routeStops.value = stops
 
+            // Distance verification check: Driver must be near the first stop (within 150m)
+            val firstStop = stops.first()
+            val driverLoc = _preTripDriverLocation.value
+            if (driverLoc != null) {
+                val dist = calculateDistance(
+                    driverLoc.latitude,
+                    driverLoc.longitude,
+                    firstStop.latitude.toDouble(),
+                    firstStop.longitude.toDouble()
+                )
+                if (dist > 0.15) { // more than 150 meters away
+                    val stopName = firstStop.stopName
+                    val formattedDist = String.format(java.util.Locale.US, "%.2f", dist)
+                    _tripStartError.value = "Cannot Start Trip: You are $formattedDist km away from '$stopName' (First Stop). Please proceed to the first stop first to begin the trip."
+                    return@launch
+                }
+            }
+
+            // Successful start - clean up pre-trip tracking
+            stopPreTripRealLocationTracking()
+            _tripStartError.value = null
+
             val startLat = stops.first().latitude
             val startLng = stops.first().longitude
 
-            val tripId = repository.startTrip(driverId, busId, routeId, startLat, startLng).toInt()
+            val tripId = repository.startTrip(driverId, busId, routeId, startLat, startLng, _isSimulationMode.value).toInt()
             _activeTripId.value = tripId
             _tripResumed.value = false
 
@@ -209,7 +453,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             _parentLatenessSeconds.value = 0
             simulationProgress = 0
 
-            startSimulation(tripId, stops)
+            // If we are starting a real trip, open WebSocket
+            if (!_isSimulationMode.value) {
+                WebSocketManager.connect()
+                startRealGpsTracking(tripId)
+            } else {
+                startSimulation(tripId, stops)
+            }
         }
     }
 
@@ -224,6 +474,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private fun startSimulation(tripId: Int, stops: List<RouteStop>) {
         simulationJob?.cancel()
         simulationJob = viewModelScope.launch {
+            var lastTickSpeed = _simSpeedSlider.value
             while (true) {
                 delay(1000) // Simulation tick every second
                 val trip = repository.getTripByIdSync(tripId) ?: break
@@ -233,6 +484,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     if (_parentLatenessTimerActive.value) {
                         _parentLatenessSeconds.value += 1
                     }
+                    lastTickSpeed = 0.0 // Reset speed baseline at stop
                     continue
                 }
 
@@ -285,32 +537,91 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
-                // Update database
-                repository.updateTripPosition(
-                    tripId = tripId,
-                    lat = nextLat,
-                    lng = nextLng,
-                    speed = currentSpeed,
-                    stopIndex = currIndex,
-                    isDeviated = _simIsDeviated.value,
-                    isOvertaking = trip.isOvertaking
-                )
+                // Catch sudden speed increase (acceleration) / overtaking
+                val speedDelta = currentSpeed - lastTickSpeed
+                var isOvertakingCurrentTick = trip.isOvertaking
 
-                // If progress reaches 10, we arrived at the next stop!
-                if (simulationProgress >= 10) {
-                    // Arrived at next stop!
-                    val arrivedIndex = currIndex + 1
+                if (speedDelta >= 12.0 && lastTickSpeed > 5.0) { // Sudden acceleration of 12+ km/h in 1 sec while moving
+                    val now = System.currentTimeMillis()
+                    if (now - lastOvertakingLogged > 10000L) {
+                        lastOvertakingLogged = now
+                        isOvertakingCurrentTick = true
+                        
+                        viewModelScope.launch {
+                            val stopName = currentStop.stopName
+                            logSimulationViolation(
+                                tripId = tripId,
+                                type = "OVERTAKING",
+                                details = "Dangerous sudden speed increase & overtaking caught! Speed surged from ${lastTickSpeed.toInt()} to ${currentSpeed.toInt()} km/h (+${speedDelta.toInt()} km/h/s) near $stopName",
+                                value = currentSpeed
+                            )
+
+                            // Clear overtaking flag after 4 seconds
+                            delay(4000)
+                            val cleanTrip = repository.getTripByIdSync(tripId)
+                            if (cleanTrip != null && cleanTrip.status == "ACTIVE") {
+                                repository.updateTripPosition(
+                                    tripId = tripId,
+                                    lat = cleanTrip.currentLatitude,
+                                    lng = cleanTrip.currentLongitude,
+                                    speed = _simSpeedSlider.value,
+                                    stopIndex = cleanTrip.currentStopIndex,
+                                    isDeviated = cleanTrip.isDeviated,
+                                    isOvertaking = false
+                                )
+                            }
+                        }
+                    }
+                }
+                lastTickSpeed = currentSpeed
+
+                if (_isSimulationMode.value) {
+                    // --- SIMULATION MODE: Update locally immediately ---
                     repository.updateTripPosition(
                         tripId = tripId,
-                        lat = nextStop.latitude,
-                        lng = nextStop.longitude,
-                        speed = 0.0,
-                        stopIndex = arrivedIndex,
+                        lat = nextLat,
+                        lng = nextLng,
+                        speed = currentSpeed,
+                        stopIndex = currIndex,
                         isDeviated = _simIsDeviated.value,
-                        isOvertaking = false
+                        isOvertaking = isOvertakingCurrentTick
                     )
-                    simulationProgress = 0
-                    _waitingAtStop.value = true
+
+                    // If progress reaches 10, we arrived at the next stop!
+                    if (simulationProgress >= 10) {
+                        // Arrived at next stop!
+                        val arrivedIndex = currIndex + 1
+                        repository.updateTripPosition(
+                            tripId = tripId,
+                            lat = nextStop.latitude,
+                            lng = nextStop.longitude,
+                            speed = 0.0,
+                            stopIndex = arrivedIndex,
+                            isDeviated = _simIsDeviated.value,
+                            isOvertaking = false
+                        )
+                        simulationProgress = 0
+                        _waitingAtStop.value = true
+                    }
+                } else {
+                    // --- REAL MODE: Stream over OkHttp WebSocket ---
+                    if (simulationProgress >= 10) {
+                        WebSocketManager.sendTelemetry(
+                            tripId = tripId,
+                            lat = nextStop.latitude.toDouble(),
+                            lng = nextStop.longitude.toDouble(),
+                            speed = 0.0,
+                            isDeviated = _simIsDeviated.value
+                        )
+                    } else {
+                        WebSocketManager.sendTelemetry(
+                            tripId = tripId,
+                            lat = nextLat.toDouble(),
+                            lng = nextLng.toDouble(),
+                            speed = currentSpeed,
+                            isDeviated = _simIsDeviated.value
+                        )
+                    }
                 }
             }
         }
@@ -319,6 +630,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun stopSimulation() {
         simulationJob?.cancel()
         simulationJob = null
+        stopRealGpsTracking()
         _activeTripId.value = null
         _currentTrip.value = null
         _routeStops.value = emptyList()
@@ -327,6 +639,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         _parentLatenessSeconds.value = 0
         simulationProgress = 0
         _tripResumed.value = false
+        WebSocketManager.disconnect()
     }
 
     // Trigger parent lateness stop
@@ -494,5 +807,103 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         val dist = 6371.0 * c // distance in km
 
         return if (dist < 1.0) "${(dist * 1000).toInt()} meters" else String.format("%.2f km", dist)
+    }
+
+    private fun calculateDistance(lat1: Double, lng1: Double, lat2: Double, lng2: Double): Double {
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLng = Math.toRadians(lng2 - lng1)
+        val a = sin(dLat / 2).pow(2) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLng / 2).pow(2)
+        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return 6371.0 * c // in km
+    }
+
+    private fun startRealGpsTracking(tripId: Int) {
+        stopRealGpsTracking()
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L).apply {
+            setMinUpdateIntervalMillis(1000L)
+        }.build()
+
+        val callback = object : LocationCallback() {
+            override fun onLocationResult(locationResult: LocationResult) {
+                val location = locationResult.lastLocation ?: return
+                val lat = location.latitude
+                val lng = location.longitude
+                val speed = location.speed * 3.6 // Convert m/s to km/h
+                
+                Log.d("TrackerViewModel", "Real GPS Position Update: lat=$lat, lng=$lng, speed=$speed")
+
+                viewModelScope.launch {
+                    val trip = repository.getTripByIdSync(tripId) ?: return@launch
+                    val stops = _routeStops.value
+                    val currIndex = trip.currentStopIndex
+                    
+                    var arrivedIndex = currIndex
+                    if (stops.isNotEmpty() && currIndex < stops.size - 1) {
+                        val nextStop = stops[currIndex + 1]
+                        val dist = calculateDistance(lat, lng, nextStop.latitude.toDouble(), nextStop.longitude.toDouble())
+                        if (dist < 0.05) { // within 50 meters
+                            arrivedIndex = currIndex + 1
+                            _waitingAtStop.value = true
+                        }
+                    }
+                    
+                    val isDeviated = checkIfRealLocationDeviated(lat, lng, stops)
+
+                    // 1. Update our Room Database & Supabase immediately
+                    repository.updateTripPosition(
+                        tripId = tripId,
+                        lat = lat.toFloat(),
+                        lng = lng.toFloat(),
+                        speed = speed,
+                        stopIndex = arrivedIndex,
+                        isDeviated = isDeviated,
+                        isOvertaking = trip.isOvertaking
+                    )
+
+                    // 2. Stream telemetry over OkHttp WebSocket (which mirrors it/echoes it back)
+                    WebSocketManager.sendTelemetry(
+                        tripId = tripId,
+                        lat = lat,
+                        lng = lng,
+                        speed = speed,
+                        isDeviated = isDeviated
+                    )
+
+                    _currentTrip.value = repository.getTripByIdSync(tripId)
+                }
+            }
+        }
+        
+        locationCallback = callback
+        try {
+            fusedLocationClient.requestLocationUpdates(request, callback, android.os.Looper.getMainLooper())
+            Log.d("TrackerViewModel", "Successfully requested location updates from device GPS.")
+        } catch (e: SecurityException) {
+            Log.e("TrackerViewModel", "Location permission missing: ${e.message}")
+        }
+    }
+
+    private fun stopRealGpsTracking() {
+        locationCallback?.let { callback ->
+            try {
+                fusedLocationClient.removeLocationUpdates(callback)
+                Log.d("TrackerViewModel", "Successfully stopped device GPS tracking.")
+            } catch (e: Exception) {
+                Log.e("TrackerViewModel", "Error stopping location updates: ${e.message}")
+            }
+            locationCallback = null
+        }
+    }
+
+    private fun checkIfRealLocationDeviated(lat: Double, lng: Double, stops: List<RouteStop>): Boolean {
+        if (stops.isEmpty()) return false
+        var minDistance = Double.MAX_VALUE
+        for (stop in stops) {
+            val dist = calculateDistance(lat, lng, stop.latitude.toDouble(), stop.longitude.toDouble())
+            if (dist < minDistance) {
+                minDistance = dist
+            }
+        }
+        return minDistance > 0.5 // 500 meters off-route
     }
 }

@@ -29,6 +29,7 @@ import kotlin.math.sin
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.BitmapDescriptor
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
@@ -45,7 +46,8 @@ import com.google.maps.android.compose.MapType
 fun SimulatedMap(
     trip: Trip?,
     stops: List<RouteStop>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    driverLocation: LatLng? = null
 ) {
     val textMeasurer = rememberTextMeasurer()
 
@@ -70,7 +72,7 @@ fun SimulatedMap(
         label = "pulseAlpha"
     )
 
-    var useRealMap by remember { mutableStateOf(false) }
+    var useRealMap by remember { mutableStateOf(true) }
 
     Box(
         modifier = modifier
@@ -90,7 +92,7 @@ fun SimulatedMap(
             }
         } else {
             if (useRealMap) {
-                RealGoogleMap(trip = trip, stops = stops, modifier = Modifier.fillMaxSize())
+                RealGoogleMap(trip = trip, stops = stops, modifier = Modifier.fillMaxSize(), driverLocation = driverLocation)
             } else {
                 Canvas(
                     modifier = Modifier
@@ -380,28 +382,54 @@ fun SimulatedMap(
 fun RealGoogleMap(
     trip: Trip?,
     stops: List<RouteStop>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    driverLocation: LatLng? = null
 ) {
     val srinagarDefault = LatLng(34.0837, 74.7973)
     val cameraPositionState = rememberCameraPositionState {
         val initialLatLng = if (trip != null) {
             LatLng(trip.currentLatitude.toDouble(), trip.currentLongitude.toDouble())
+        } else if (driverLocation != null) {
+            driverLocation
         } else if (stops.isNotEmpty()) {
             LatLng(stops.first().latitude.toDouble(), stops.first().longitude.toDouble())
         } else {
             srinagarDefault
         }
-        position = CameraPosition.fromLatLngZoom(initialLatLng, 12f)
+        position = CameraPosition.fromLatLngZoom(initialLatLng, 13f)
     }
 
-    // Move camera as bus updates in real-time
-    LaunchedEffect(trip?.currentLatitude, trip?.currentLongitude) {
+    val targetLat = trip?.currentLatitude ?: (stops.firstOrNull()?.latitude ?: 34.0837f)
+    val targetLng = trip?.currentLongitude ?: (stops.firstOrNull()?.longitude ?: 74.7973f)
+
+    // Smoothly animate marker coordinate transitions
+    val animatedLat by animateFloatAsState(
+        targetValue = targetLat,
+        animationSpec = tween(durationMillis = 2000, easing = LinearEasing),
+        label = "busLatitude"
+    )
+    val animatedLng by animateFloatAsState(
+        targetValue = targetLng,
+        animationSpec = tween(durationMillis = 2000, easing = LinearEasing),
+        label = "busLongitude"
+    )
+
+    // Move camera smoothly as bus animated coordinates update
+    LaunchedEffect(animatedLat, animatedLng) {
         if (trip != null) {
             cameraPositionState.animate(
-                CameraUpdateFactory.newLatLngZoom(
-                    LatLng(trip.currentLatitude.toDouble(), trip.currentLongitude.toDouble()),
-                    13f
+                CameraUpdateFactory.newLatLng(
+                    LatLng(animatedLat.toDouble(), animatedLng.toDouble())
                 )
+            )
+        }
+    }
+
+    // Move camera smoothly if driverLocation changes before the trip starts
+    LaunchedEffect(driverLocation) {
+        if (trip == null && driverLocation != null) {
+            cameraPositionState.animate(
+                CameraUpdateFactory.newLatLng(driverLocation)
             )
         }
     }
@@ -456,14 +484,32 @@ fun RealGoogleMap(
                 )
             }
 
-            // Draw active bus Marker
-            if (trip != null) {
-                val busLatLng = LatLng(trip.currentLatitude.toDouble(), trip.currentLongitude.toDouble())
+            // Draw pre-trip driver phone marker if trip is null and driverLocation is not null
+            if (trip == null && driverLocation != null) {
                 Marker(
-                    state = rememberMarkerState(position = busLatLng),
+                    state = rememberMarkerState(position = driverLocation),
+                    title = "Driver's Current Location (Phone)",
+                    snippet = "Proceed to the first stop (Green Pin) to start route",
+                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)
+                )
+            }
+
+            // Draw active bus Marker with smooth animated position
+            if (trip != null) {
+                val animatedBusLatLng = LatLng(animatedLat.toDouble(), animatedLng.toDouble())
+                val markerState = rememberMarkerState(position = animatedBusLatLng)
+                
+                // Keep marker state in sync with animated position
+                LaunchedEffect(animatedBusLatLng) {
+                    markerState.position = animatedBusLatLng
+                }
+
+                val busIcon = remember<BitmapDescriptor> { createBusIcon() }
+                Marker(
+                    state = markerState,
                     title = "Active Bus ID: ${trip.busId}",
                     snippet = "Speed: ${trip.currentSpeed.toInt()} km/h",
-                    icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)
+                    icon = busIcon
                 )
             }
         }
@@ -494,5 +540,62 @@ fun RealGoogleMap(
             }
         }
     }
+}
+
+private fun createBusIcon(): BitmapDescriptor {
+    val size = 96
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+    // Outer circle shadow/glow
+    paint.color = 0x40000000
+    canvas.drawCircle(size / 2f, size / 2f + 3f, size / 2f - 3f, paint)
+
+    // Outer circular container: School Bus Yellow
+    paint.color = 0xFFFFC107.toInt()
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 4f, paint)
+
+    // Inner dark circle for contrast
+    paint.color = 0xFF1E262A.toInt()
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 10f, paint)
+
+    val cx = size / 2f
+    val cy = size / 2f
+
+    // Draw wheels
+    paint.color = 0xFF121212.toInt()
+    canvas.drawRoundRect(cx - 14f, cy + 10f, cx - 8f, cy + 18f, 3f, 3f, paint)
+    canvas.drawRoundRect(cx + 8f, cy + 10f, cx + 14f, cy + 18f, 3f, 3f, paint)
+
+    // Bumper
+    paint.color = 0xFF757575.toInt()
+    canvas.drawRoundRect(cx - 16f, cy + 8f, cx + 16f, cy + 12f, 2f, 2f, paint)
+
+    // Bus body: School Bus Yellow
+    paint.color = 0xFFFFC107.toInt()
+    canvas.drawRoundRect(cx - 16f, cy - 14f, cx + 16f, cy + 8f, 6f, 6f, paint)
+
+    // Bus roof cap
+    paint.color = 0xFFFFD54F.toInt()
+    canvas.drawRoundRect(cx - 13f, cy - 14f, cx + 13f, cy - 9f, 3f, 3f, paint)
+
+    // Front windshield window
+    paint.color = 0xFF212121.toInt()
+    canvas.drawRoundRect(cx - 12f, cy - 7f, cx + 12f, cy + 1f, 3f, 3f, paint)
+
+    paint.color = 0xFF00E5FF.toInt()
+    canvas.drawRoundRect(cx - 10f, cy - 5f, cx + 10f, cy - 1f, 2f, 2f, paint)
+
+    // Headlights
+    paint.color = 0xFFFFFFFF.toInt()
+    canvas.drawCircle(cx - 9f, cy + 5f, 3.5f, paint)
+    canvas.drawCircle(cx + 9f, cy + 5f, 3.5f, paint)
+
+    paint.color = 0xFFFFEB3B.toInt()
+    canvas.drawCircle(cx - 9f, cy + 5f, 2f, paint)
+    canvas.drawCircle(cx + 9f, cy + 5f, 2f, paint)
+
+    return BitmapDescriptorFactory.fromBitmap(bitmap)
 }
 

@@ -87,31 +87,10 @@ fun ParentScreen(
         stops.find { it.id == parentStopId } ?: stops.getOrNull(1) ?: stops.firstOrNull()
     }
 
-    var parentCheckedIn by remember(activeTrip?.id, selectedStop?.id) { mutableStateOf(false) }
-    var busArrivalTime by remember(activeTrip?.id, selectedStop?.id) { mutableStateOf<Long?>(null) }
-    var secondsSinceBusArrival by remember { mutableStateOf(0) }
-    var loggedDelayVal by remember(activeTrip?.id, selectedStop?.id) { mutableStateOf<Double?>(null) }
-
     val selectedStopIndex = remember(stops, selectedStop) {
         stops.indexOfFirst { it.id == selectedStop?.id }
     }
     val isBusAtSelectedStop = activeTrip != null && activeTrip.currentStopIndex == selectedStopIndex
-
-    LaunchedEffect(isBusAtSelectedStop, parentCheckedIn) {
-        if (isBusAtSelectedStop && !parentCheckedIn) {
-            if (busArrivalTime == null) {
-                busArrivalTime = System.currentTimeMillis()
-            }
-            while (true) {
-                val arrival = busArrivalTime ?: System.currentTimeMillis()
-                secondsSinceBusArrival = ((System.currentTimeMillis() - arrival) / 1000).toInt()
-                delay(1000)
-            }
-        } else if (!isBusAtSelectedStop) {
-            secondsSinceBusArrival = 0
-            busArrivalTime = null
-        }
-    }
 
     Column(
         modifier = modifier
@@ -357,15 +336,36 @@ fun ParentScreen(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (activeTrip != null) Color(0xFF1B5E20) else Color(0xFF2C2C2C))
-                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .background(
+                                        if (activeTrip != null) {
+                                            if (activeTrip.isSimulation) Color(0xFF2C1E1B) else Color(0xFF163220)
+                                        } else {
+                                            Color(0xFF2C2C2C)
+                                        }
+                                    )
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
                             ) {
-                                Text(
-                                    text = if (activeTrip != null) "LIVE NOW" else "OFF-DUTY",
-                                    color = if (activeTrip != null) Color.Green else Color.Gray,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.sp
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (activeTrip != null) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(RoundedCornerShape(3.dp))
+                                                .background(if (activeTrip.isSimulation) Color(0xFFFF9800) else Color(0xFF00E676))
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        text = if (activeTrip != null) {
+                                            if (activeTrip.isSimulation) "SIMULATING" else "LIVE GPS"
+                                        } else "OFF-DUTY",
+                                        color = if (activeTrip != null) {
+                                            if (activeTrip.isSimulation) Color(0xFFFF9800) else Color(0xFF00E676)
+                                        } else Color.Gray,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
                             }
                         }
                     }
@@ -460,22 +460,20 @@ fun ParentScreen(
                         }
                     }
 
-                    // My Stop Portal & Parent Delay Metric Card
-                    val parentDelayMinutes = secondsSinceBusArrival * 0.5
+                    // My Stop Portal
                     val hasArrivedPassed = activeTrip.currentStopIndex > selectedStopIndex
 
                     item {
                         Card(
                             colors = CardDefaults.cardColors(
                                 containerColor = when {
-                                    parentCheckedIn && (loggedDelayVal ?: 0.0) > 0.0 -> Color(0xFF2C1B1B)
-                                    parentCheckedIn -> Color(0xFF1B5E20)
-                                    isBusAtSelectedStop -> Color(0xFF2C1B1B)
+                                    isBusAtSelectedStop -> Color(0xFF163220)
+                                    hasArrivedPassed -> Color(0xFF1E1E1E)
                                     else -> Color(0xFF1E1E1E)
                                 }
                             ),
-                            border = if (isBusAtSelectedStop && !parentCheckedIn) {
-                                androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE53935).copy(alpha = 0.5f))
+                            border = if (isBusAtSelectedStop) {
+                                androidx.compose.foundation.BorderStroke(1.dp, Color.Green.copy(alpha = 0.5f))
                             } else null,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth().testTag("parent_stop_card")
@@ -490,13 +488,13 @@ fun ParentScreen(
                                         Icon(
                                             imageVector = Icons.Default.Home,
                                             contentDescription = "My Stop",
-                                            tint = if (isBusAtSelectedStop && !parentCheckedIn) Color(0xFFE53935) else Color(0xFFFF9800),
+                                            tint = if (isBusAtSelectedStop) Color(0xFF00E676) else Color(0xFFFF9800),
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             text = "MY BUS STOP PORTAL",
-                                            color = if (isBusAtSelectedStop && !parentCheckedIn) Color(0xFFE53935) else Color(0xFFFF9800),
+                                            color = if (isBusAtSelectedStop) Color(0xFF00E676) else Color(0xFFFF9800),
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 11.sp,
                                             letterSpacing = 0.5.sp
@@ -508,26 +506,23 @@ fun ParentScreen(
                                             .clip(RoundedCornerShape(6.dp))
                                             .background(
                                                 when {
-                                                    parentCheckedIn && (loggedDelayVal ?: 0.0) > 0.0 -> Color(0xFFE53935).copy(alpha = 0.15f)
-                                                    parentCheckedIn -> Color(0xFF00E676).copy(alpha = 0.15f)
-                                                    isBusAtSelectedStop -> Color(0xFFE53935).copy(alpha = 0.15f)
-                                                    else -> Color.DarkGray
+                                                    isBusAtSelectedStop -> Color(0xFF00E676).copy(alpha = 0.15f)
+                                                    hasArrivedPassed -> Color.DarkGray
+                                                    else -> Color(0xFFFF9800).copy(alpha = 0.15f)
                                                 }
                                             )
                                             .padding(horizontal = 8.dp, vertical = 4.dp)
                                     ) {
                                         Text(
                                             text = when {
-                                                parentCheckedIn && (loggedDelayVal ?: 0.0) > 0.0 -> "LATE"
-                                                parentCheckedIn -> "ON TIME"
                                                 isBusAtSelectedStop -> "BUS AT STOP"
-                                                else -> "WAITING"
+                                                hasArrivedPassed -> "BUS DEPARTED"
+                                                else -> "IN TRANSIT"
                                             },
                                             color = when {
-                                                parentCheckedIn && (loggedDelayVal ?: 0.0) > 0.0 -> Color(0xFFEF5350)
-                                                parentCheckedIn -> Color(0xFF00E676)
-                                                isBusAtSelectedStop -> Color(0xFFEF5350)
-                                                else -> Color.LightGray
+                                                isBusAtSelectedStop -> Color(0xFF00E676)
+                                                hasArrivedPassed -> Color.LightGray
+                                                else -> Color(0xFFFF9800)
                                             },
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 10.sp
@@ -553,101 +548,36 @@ fun ParentScreen(
 
                                 Spacer(modifier = Modifier.height(12.dp))
 
-                                if (!parentCheckedIn) {
-                                    if (isBusAtSelectedStop) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text(
-                                                text = "Bus is at your stop! Calculating delay...",
-                                                color = Color.LightGray,
-                                                fontSize = 11.sp
-                                            )
-                                            Text(
-                                                text = "PARENT DELAY: ${String.format("%.1f", parentDelayMinutes)} mins",
-                                                color = Color(0xFFE53935),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 18.sp,
-                                                modifier = Modifier.padding(vertical = 4.dp)
-                                            )
-                                            Button(
-                                                onClick = {
-                                                    val finalDelay = parentDelayMinutes
-                                                    if (finalDelay > 0.1) {
-                                                        loggedDelayVal = finalDelay
-                                                        viewModel.logParentDelay(activeTrip.id, selectedStop?.stopName ?: "Stop", finalDelay)
-                                                    } else {
-                                                        loggedDelayVal = 0.0
-                                                    }
-                                                    parentCheckedIn = true
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935)),
-                                                modifier = Modifier.fillMaxWidth().testTag("parent_check_in_btn")
-                                            ) {
-                                                Text("I've Arrived • Check In", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                            }
-                                        }
-                                    } else if (hasArrivedPassed) {
-                                        Column(modifier = Modifier.fillMaxWidth()) {
-                                            Text(
-                                                text = "The bus has already passed your stop and you were not checked in.",
-                                                color = Color.Gray,
-                                                fontSize = 12.sp
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Button(
-                                                onClick = {
-                                                    val finalDelay = 5.0
-                                                    loggedDelayVal = finalDelay
-                                                    viewModel.logParentDelay(activeTrip.id, selectedStop?.stopName ?: "Stop", finalDelay)
-                                                    parentCheckedIn = true
-                                                },
-                                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text("Record Delayed Arrival (Missed Bus)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                            }
-                                        }
-                                    } else {
-                                        Button(
-                                            onClick = {
-                                                loggedDelayVal = 0.0
-                                                parentCheckedIn = true
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                                            modifier = Modifier.fillMaxWidth().testTag("parent_check_in_btn")
-                                        ) {
-                                            Text("I am at the Stop (Pre-Check)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        }
-                                    }
-                                } else {
-                                    val delayVal = loggedDelayVal ?: 0.0
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(
-                                            imageVector = if (delayVal > 0.0) Icons.Default.Warning else Icons.Default.CheckCircle,
-                                            contentDescription = "Status",
-                                            tint = if (delayVal > 0.0) Color(0xFFEF5350) else Color(0xFF00E676),
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(12.dp))
-                                        Column {
-                                            Text(
-                                                text = if (delayVal > 0.0) "Logged Delayed Arrival" else "Checked In Safely",
-                                                color = Color.White,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 14.sp
-                                            )
-                                            Text(
-                                                text = if (delayVal > 0.0) "Parent tardiness logged: Delayed by ${String.format("%.1f", delayVal)} mins" else "You checked in on time before the bus left.",
-                                                color = Color.LightGray,
-                                                fontSize = 12.sp
-                                            )
-                                        }
-                                    }
+                                val portalStatusMessage = when {
+                                    isBusAtSelectedStop -> "The school bus is currently at your designated stop! Please make sure your child is ready to board immediately."
+                                    hasArrivedPassed -> "The school bus has completed this stop and is proceeding to the next stop along the route."
+                                    else -> "The school bus is in transit. Estimated arrival at your stop is ${selectedStop?.expectedArrivalMinutes ?: 0} mins."
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(
+                                        imageVector = when {
+                                            isBusAtSelectedStop -> Icons.Default.DirectionsBus
+                                            hasArrivedPassed -> Icons.Default.CheckCircle
+                                            else -> Icons.Default.Schedule
+                                        },
+                                        contentDescription = "Status Icon",
+                                        tint = when {
+                                            isBusAtSelectedStop -> Color(0xFF00E676)
+                                            hasArrivedPassed -> Color.Gray
+                                            else -> Color(0xFFFF9800)
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = portalStatusMessage,
+                                        color = Color.LightGray,
+                                        fontSize = 12.sp
+                                    )
                                 }
                             }
                         }

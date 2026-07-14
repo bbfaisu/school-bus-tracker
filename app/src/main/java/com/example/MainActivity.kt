@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
 fun MainAppShell(viewModel: TrackerViewModel) {
     val currentRole by viewModel.currentRole.collectAsState()
     val activeTripId by viewModel.activeTripId.collectAsState()
+    val supabaseConnected by viewModel.supabaseConnected.collectAsState()
 
     Scaffold(
         modifier = Modifier
@@ -96,12 +97,16 @@ fun MainAppShell(viewModel: TrackerViewModel) {
                         }
                     }
 
-                    // Simulated live status indicator
-                    if (activeTripId != null) {
+                    // Simulated live status indicator + Supabase sync status
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // Supabase cloud sync indicator
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF1B5E20))
+                                .background(if (supabaseConnected) Color(0xFF1B5E20) else Color(0xFF5C1B1B))
                                 .padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -109,37 +114,62 @@ fun MainAppShell(viewModel: TrackerViewModel) {
                                 modifier = Modifier
                                     .size(6.dp)
                                     .clip(RoundedCornerShape(3.dp))
-                                    .background(Color.Green)
+                                    .background(if (supabaseConnected) Color.Green else Color(0xFFEF5350))
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "LIVE SIM",
+                                text = if (supabaseConnected) "CLOUD" else "OFFLINE",
                                 color = Color.White,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 10.sp
                             )
                         }
-                    } else {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF333333))
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
+
+                        // Simulation status indicator
+                        if (activeTripId != null) {
+                            Row(
                                 modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(Color.Gray)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "IDLE",
-                                color = Color.Gray,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 10.sp
-                            )
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFF0D47A1))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(Color(0xFF29B6F6))
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "LIVE SIM",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFF333333))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(Color.Gray)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "IDLE",
+                                    color = Color.Gray,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp
+                                )
+                            }
                         }
                     }
                 }

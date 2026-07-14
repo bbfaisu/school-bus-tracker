@@ -149,11 +149,27 @@ fun LiveFleetTab(viewModel: TrackerViewModel) {
                                     fontSize = 16.sp,
                                     color = Color.White
                                 )
-                                Text(
-                                    text = "Driver: ${driver?.name ?: "Unknown"} • Bus: ${bus?.plateNumber ?: "Unknown"}",
-                                    color = Color.Gray,
-                                    fontSize = 13.sp
-                                )
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                    Text(
+                                        text = "Driver: ${driver?.name ?: "Unknown"} • Bus: ${bus?.plateNumber ?: "Unknown"}",
+                                        color = Color.Gray,
+                                        fontSize = 13.sp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(if (trip.isSimulation) Color(0xFF3E2723) else Color(0xFF1B5E20))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = if (trip.isSimulation) "SIMULATION" else "LIVE GPS",
+                                            color = if (trip.isSimulation) Color(0xFFFF9800) else Color(0xFF00E676),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 9.sp
+                                        )
+                                    }
+                                }
                             }
 
                             val isViolating = trip.currentSpeed > (route?.speedLimit ?: 40.0) || trip.isDeviated || trip.isOvertaking

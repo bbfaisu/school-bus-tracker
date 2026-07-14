@@ -1,7 +1,6 @@
 package com.example.data
 
-import androidx.room.Entity
-import androidx.room.PrimaryKey
+import androidx.room.*
 
 @Entity(tableName = "buses")
 data class Bus(
@@ -55,7 +54,8 @@ data class Trip(
     val currentSpeed: Double,
     val currentStopIndex: Int = 0,
     val isDeviated: Boolean = false,
-    val isOvertaking: Boolean = false
+    val isOvertaking: Boolean = false,
+    @ColumnInfo(name = "is_simulation", defaultValue = "1") val isSimulation: Boolean = true
 )
 
 @Entity(tableName = "violation_records")

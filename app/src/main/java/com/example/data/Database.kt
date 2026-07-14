@@ -104,7 +104,7 @@ interface ViolationDao {
 
 @Database(
     entities = [Bus::class, Driver::class, BusRoute::class, RouteStop::class, Trip::class, ViolationRecord::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -124,7 +124,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "safe_school_bus_database"
-                ).build()
+                )
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }

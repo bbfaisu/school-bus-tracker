@@ -1,5 +1,6 @@
 package com.example.data
 
+import android.util.Log
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
@@ -29,26 +30,109 @@ class BusTrackerRepository(private val database: AppDatabase) {
     suspend fun getDriverByUsername(username: String): Driver? = driverDao.getDriverByUsername(username)
     suspend fun getDriverById(driverId: Int): Driver? = driverDao.getDriverById(driverId)
 
-    suspend fun insertBus(bus: Bus) = busDao.insertBus(bus)
-    suspend fun updateBus(bus: Bus) = busDao.updateBus(bus)
-    suspend fun deleteBus(bus: Bus) = busDao.deleteBus(bus)
+    suspend fun syncWithSupabase() {
+        try {
+            Log.d("BusTrackerRepository", "Starting background sync with Supabase...")
+            // Pull new/updated Buses from Supabase and insert into Room
+            val remoteBuses = SupabaseDbManager.fetchAllBuses()
+            for (bus in remoteBuses) {
+                busDao.insertBus(bus)
+            }
 
-    suspend fun insertDriver(driver: Driver) = driverDao.insertDriver(driver)
-    suspend fun updateDriver(driver: Driver) = driverDao.updateDriver(driver)
-    suspend fun deleteDriver(driver: Driver) = driverDao.deleteDriver(driver)
+            // Pull Routes
+            val remoteRoutes = SupabaseDbManager.fetchAllRoutes()
+            for (route in remoteRoutes) {
+                routeDao.insertRoute(route)
+            }
+
+            // Pull Route Stops
+            val remoteStops = SupabaseDbManager.fetchAllRouteStops()
+            for (stop in remoteStops) {
+                routeDao.insertStop(stop)
+            }
+
+            // Pull Drivers
+            val remoteDrivers = SupabaseDbManager.fetchAllDrivers()
+            for (driver in remoteDrivers) {
+                driverDao.insertDriver(driver)
+            }
+
+            // Pull Trips
+            val remoteTrips = SupabaseDbManager.fetchAllTrips()
+            for (trip in remoteTrips) {
+                tripDao.insertTrip(trip)
+            }
+
+            // Pull Violations
+            val remoteViolations = SupabaseDbManager.fetchAllViolations()
+            for (violation in remoteViolations) {
+                violationDao.insertViolation(violation)
+            }
+            Log.d("BusTrackerRepository", "Synchronized successfully with Supabase!")
+        } catch (e: Exception) {
+            Log.e("BusTrackerRepository", "Failed to sync with Supabase: ${e.message}")
+        }
+    }
+
+    suspend fun insertBus(bus: Bus) {
+        busDao.insertBus(bus)
+        try { SupabaseDbManager.pushBus(bus) } catch (e: Exception) { Log.e("Repository", "Push bus failed", e) }
+    }
+
+    suspend fun updateBus(bus: Bus) {
+        busDao.updateBus(bus)
+        try { SupabaseDbManager.pushBus(bus) } catch (e: Exception) { Log.e("Repository", "Push bus failed", e) }
+    }
+
+    suspend fun deleteBus(bus: Bus) {
+        busDao.deleteBus(bus)
+        try { SupabaseDbManager.deleteBus(bus) } catch (e: Exception) { Log.e("Repository", "Delete bus failed", e) }
+    }
+
+    suspend fun insertDriver(driver: Driver) {
+        driverDao.insertDriver(driver)
+        try { SupabaseDbManager.pushDriver(driver) } catch (e: Exception) { Log.e("Repository", "Push driver failed", e) }
+    }
+
+    suspend fun updateDriver(driver: Driver) {
+        driverDao.updateDriver(driver)
+        try { SupabaseDbManager.pushDriver(driver) } catch (e: Exception) { Log.e("Repository", "Push driver failed", e) }
+    }
+
+    suspend fun deleteDriver(driver: Driver) {
+        driverDao.deleteDriver(driver)
+        try { SupabaseDbManager.deleteDriver(driver) } catch (e: Exception) { Log.e("Repository", "Delete driver failed", e) }
+    }
 
     suspend fun insertRoute(routeName: String, speedLimit: Double): Long {
         val route = BusRoute(routeName = routeName, speedLimit = speedLimit)
-        return routeDao.insertRoute(route)
+        val generatedId = routeDao.insertRoute(route)
+        val routeWithId = route.copy(id = generatedId.toInt())
+        try {
+            val stops = routeDao.getStopsForRouteSync(generatedId.toInt())
+            SupabaseDbManager.pushRoute(routeWithId, stops)
+        } catch (e: Exception) { Log.e("Repository", "Push route failed", e) }
+        return generatedId
     }
 
-    suspend fun insertStop(stop: RouteStop) = routeDao.insertStop(stop)
+    suspend fun insertStop(stop: RouteStop) {
+        routeDao.insertStop(stop)
+        try {
+            val route = routeDao.getAllRoutesSync().firstOrNull { it.id == stop.routeId }
+            if (route != null) {
+                val stops = routeDao.getStopsForRouteSync(route.id)
+                SupabaseDbManager.pushRoute(route, stops)
+            }
+        } catch (e: Exception) { Log.e("Repository", "Push stop failed", e) }
+    }
+
     suspend fun deleteRoute(route: BusRoute) {
         routeDao.deleteStopsForRoute(route.id)
         routeDao.deleteRoute(route)
+        try { SupabaseDbManager.deleteRoute(route) } catch (e: Exception) { Log.e("Repository", "Delete route failed", e) }
     }
 
-    suspend fun startTrip(driverId: Int, busId: Int, routeId: Int, startLat: Float, startLng: Float): Long {
+    suspend fun startTrip(driverId: Int, busId: Int, routeId: Int, startLat: Float, startLng: Float, isSimulation: Boolean): Long {
         val trip = Trip(
             driverId = driverId,
             busId = busId,
@@ -58,9 +142,13 @@ class BusTrackerRepository(private val database: AppDatabase) {
             currentLatitude = startLat,
             currentLongitude = startLng,
             currentSpeed = 0.0,
-            currentStopIndex = 0
+            currentStopIndex = 0,
+            isSimulation = isSimulation
         )
-        return tripDao.insertTrip(trip)
+        val generatedId = tripDao.insertTrip(trip)
+        val tripWithId = trip.copy(id = generatedId.toInt())
+        try { SupabaseDbManager.pushTrip(tripWithId) } catch (e: Exception) { Log.e("Repository", "Push trip failed", e) }
+        return generatedId
     }
 
     suspend fun updateTripPosition(tripId: Int, lat: Float, lng: Float, speed: Double, stopIndex: Int, isDeviated: Boolean, isOvertaking: Boolean) {
@@ -74,6 +162,7 @@ class BusTrackerRepository(private val database: AppDatabase) {
             isOvertaking = isOvertaking
         )
         tripDao.updateTrip(updated)
+        try { SupabaseDbManager.pushTrip(updated) } catch (e: Exception) { Log.e("Repository", "Push trip position failed", e) }
     }
 
     suspend fun completeTrip(tripId: Int) {
@@ -83,6 +172,7 @@ class BusTrackerRepository(private val database: AppDatabase) {
             endTime = System.currentTimeMillis()
         )
         tripDao.updateTrip(updated)
+        try { SupabaseDbManager.pushTrip(updated) } catch (e: Exception) { Log.e("Repository", "Push complete trip failed", e) }
     }
 
     suspend fun logViolation(tripId: Int, driverName: String, busPlate: String, routeName: String, type: String, details: String, value: Double) {
@@ -96,6 +186,7 @@ class BusTrackerRepository(private val database: AppDatabase) {
             value = value
         )
         violationDao.insertViolation(record)
+        try { SupabaseDbManager.pushViolation(record) } catch (e: Exception) { Log.e("Repository", "Push violation failed", e) }
     }
 
     suspend fun checkAndPrepopulate() {
