@@ -747,6 +747,113 @@ fun ActiveSimDriverPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute,
 
     var isTimelineExpanded by remember { mutableStateOf(true) }
 
+    if (waitingAtStop) {
+        val stopName = stops.getOrNull(currentTrip?.currentStopIndex ?: 0)?.stopName ?: "Destination Stop"
+        AlertDialog(
+            onDismissRequest = { /* Modal: prevent dismiss on outside tap */ },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.PushPin,
+                        contentDescription = "Arrived",
+                        tint = Color(0xFF00E676),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Arrived at Stop",
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                }
+            },
+            text = {
+                Column {
+                    Text(
+                        text = stopName,
+                        color = Color.White,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 20.sp,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    
+                    if (!latenessTimerActive) {
+                        Text(
+                            text = "Please verify if students/parents are present at this stop. If they are not here, you can trigger the Lateness tracker to log the delay.",
+                            color = Color.LightGray,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp
+                        )
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(Color(0xFF2C1C1C), shape = RoundedCornerShape(8.dp))
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = "Calculating Parent Lateness...",
+                                color = Color.LightGray,
+                                fontSize = 11.sp
+                            )
+                            val minutesLate = (latenessSec * 0.5)
+                            Text(
+                                text = "DELAY: ${String.format("%.1f", minutesLate)} mins",
+                                color = Color(0xFFEF5350),
+                                fontWeight = FontWeight.Black,
+                                fontSize = 24.sp,
+                                modifier = Modifier.padding(vertical = 6.dp)
+                            )
+                            Text(
+                                text = "Real-time updates are being dispatched to parents.",
+                                color = Color.Gray,
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                if (!latenessTimerActive) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { viewModel.parentArrivedAndResume() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                            modifier = Modifier.weight(1f).testTag("dialog_parents_present_btn")
+                        ) {
+                            Text("Parents Present", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = { viewModel.triggerParentLatenessStart() },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
+                            modifier = Modifier.weight(1f).testTag("dialog_parent_late_btn")
+                        ) {
+                            Text("Parent is Late!", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                } else {
+                    Button(
+                        onClick = { viewModel.parentArrivedAndResume() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                        modifier = Modifier.fillMaxWidth().testTag("dialog_parent_arrived_resume_btn")
+                    ) {
+                        Text("Parent Arrived • Resume Driving", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+                }
+            },
+            dismissButton = null,
+            containerColor = Color(0xFF1E1E1E),
+            shape = RoundedCornerShape(16.dp)
+        )
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         if (tripResumed) {
             Card(
@@ -1271,79 +1378,8 @@ fun ActiveSimDriverPanel(viewModel: TrackerViewModel, bus: Bus, route: BusRoute,
                     }
                 }
 
-                // Arrived at stop handler
-                if (waitingAtStop) {
-                    val stopName = stops.getOrNull(currentTrip?.currentStopIndex ?: 0)?.stopName ?: "Destination Stop"
-                    item {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = Color(0xFF163220)),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.Green.copy(alpha = 0.5f)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(imageVector = Icons.Default.PushPin, contentDescription = "Arrived", tint = Color.Green)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Arrived at Stop: $stopName",
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp
-                                    )
-                                }
+                // Arrived at stop handler is now managed in a modal AlertDialog above
 
-                                Spacer(modifier = Modifier.height(10.dp))
-
-                                if (!latenessTimerActive) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Button(
-                                            onClick = { viewModel.parentArrivedAndResume() },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            Text("Parents Present", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        }
-
-                                        Button(
-                                            onClick = { viewModel.triggerParentLatenessStart() },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
-                                            modifier = Modifier.weight(1f)
-                                        ) {
-                                            Text("Parent is Late!", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        }
-                                    }
-                                } else {
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text(
-                                            text = "Calculating Parent Lateness...",
-                                            color = Color.LightGray,
-                                            fontSize = 11.sp
-                                        )
-                                        val minutesLate = (latenessSec * 0.5)
-                                        Text(
-                                            text = "DELAY: ${String.format("%.1f", minutesLate)} mins",
-                                            color = Color(0xFFE53935),
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 18.sp,
-                                            modifier = Modifier.padding(vertical = 4.dp)
-                                        )
-                                        Button(
-                                            onClick = { viewModel.parentArrivedAndResume() },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Text("Parent Arrived • Resume Driving", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
 
                 // Overtaking & Sudden Speed Increase Warning Card
                 val isOvertaking = currentTrip?.isOvertaking ?: false

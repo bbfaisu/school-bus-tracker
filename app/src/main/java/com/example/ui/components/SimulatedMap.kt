@@ -181,32 +181,17 @@ fun SimulatedMap(
                 // --- STOPS PINS ---
                 stops.forEachIndexed { index, stop ->
                     val coords = stopPoints[index]
-                    val isFirst = index == 0
-                    val isLast = index == stops.size - 1
 
-                    // Pin color
-                    val pinColor = when {
-                        isFirst -> Color(0xFF4CAF50) // Green for start
-                        isLast -> Color(0xFFE91E63)  // Pink for school/end
-                        else -> Color(0xFFFFA000)    // Orange-Amber for mid-stops
-                    }
-
-                    // Outer ring
-                    drawCircle(
-                        color = pinColor.copy(alpha = 0.25f),
-                        radius = 20f,
-                        center = coords
-                    )
-                    // Inner pin
-                    drawCircle(
-                        color = pinColor,
-                        radius = 10f,
-                        center = coords
-                    )
-                    // Core
+                    // Outer white border for contrast
                     drawCircle(
                         color = Color.White,
-                        radius = 4f,
+                        radius = 13f,
+                        center = coords
+                    )
+                    // Inner solid black dot
+                    drawCircle(
+                        color = Color.Black,
+                        radius = 9f,
                         center = coords
                     )
 
@@ -466,21 +451,16 @@ fun RealGoogleMap(
                 )
             }
 
+            val blackDotIcon = remember { createBlackDotIcon() }
+
             // Draw Stop Markers
             stops.forEachIndexed { index, stop ->
                 val stopLatLng = LatLng(stop.latitude.toDouble(), stop.longitude.toDouble())
-                val isFirst = index == 0
-                val isLast = index == stops.size - 1
-                val pinHue = when {
-                    isFirst -> BitmapDescriptorFactory.HUE_GREEN
-                    isLast -> BitmapDescriptorFactory.HUE_ROSE
-                    else -> BitmapDescriptorFactory.HUE_ORANGE
-                }
                 Marker(
                     state = rememberMarkerState(position = stopLatLng),
                     title = "${index + 1}. ${stop.stopName}",
                     snippet = "Stop Latitude: ${stop.latitude}, Longitude: ${stop.longitude}",
-                    icon = BitmapDescriptorFactory.defaultMarker(pinHue)
+                    icon = blackDotIcon
                 )
             }
 
@@ -489,7 +469,7 @@ fun RealGoogleMap(
                 Marker(
                     state = rememberMarkerState(position = driverLocation),
                     title = "Driver's Current Location (Phone)",
-                    snippet = "Proceed to the first stop (Green Pin) to start route",
+                    snippet = "Proceed to the first stop (Black Dot) to start route",
                     icon = BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)
                 )
             }
@@ -595,6 +575,23 @@ private fun createBusIcon(): BitmapDescriptor {
     paint.color = 0xFFFFEB3B.toInt()
     canvas.drawCircle(cx - 9f, cy + 5f, 2f, paint)
     canvas.drawCircle(cx + 9f, cy + 5f, 2f, paint)
+
+    return BitmapDescriptorFactory.fromBitmap(bitmap)
+}
+
+private fun createBlackDotIcon(): BitmapDescriptor {
+    val size = 48
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+    // Outer circle white border for visibility and contrast on dark backgrounds or maps
+    paint.color = 0xFFFFFFFF.toInt()
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 4f, paint)
+
+    // Inner solid black circle
+    paint.color = 0xFF000000.toInt()
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 10f, paint)
 
     return BitmapDescriptorFactory.fromBitmap(bitmap)
 }
